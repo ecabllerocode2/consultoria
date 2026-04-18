@@ -1,0 +1,27 @@
+# Dependencias
+node_modules/
+bot/node_modules/
+pwa/node_modules/
+
+# Variables de entorno y credenciales — NUNCA subir al repo
+.env
+.env.local
+bot/.env
+bot/serviceAccount.json
+pwa/.env
+pwa/.env.local
+
+# Sesión de WhatsApp persistida localmente
+bot/.wwebjs_auth/
+bot/.wwebjs_cache/
+
+# Build de la PWA
+pwa/dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
