@@ -16,11 +16,23 @@ async function pulse() {
   }
 }
 
-export function startHeartbeat() {
+export async function startHeartbeat() {
   if (_interval) clearInterval(_interval);
-  pulse(); // Pulso inmediato al conectar
+
+  // Escribir metadata del proceso al iniciar (útil para detectar reinicios)
+  try {
+    await configRef.set({
+      botStatus: true,
+      botStartedAt: FieldValue.serverTimestamp(),
+      botPid: process.pid,
+    }, { merge: true });
+  } catch (err) {
+    console.error('[Heartbeat] Error registrando inicio:', err.message);
+  }
+
+  pulse(); // Pulso inmediato
   _interval = setInterval(pulse, INTERVAL_MS);
-  console.log('[Heartbeat] Iniciado — pulso cada 60 segundos.');
+  console.log(`[Heartbeat] Iniciado (PID ${process.pid}) — pulso cada 60s.`);
 }
 
 export function stopHeartbeat() {

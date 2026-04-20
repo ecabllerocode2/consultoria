@@ -4,6 +4,7 @@ import { getGrupoAsesores } from './config.js';
 import { extractCurps, randomDelay } from './utils.js';
 import { uploadPdf } from './r2Client.js';
 import { cancelPdfWatch } from './watchdog.js';
+import { enqueue } from './sendQueue.js';
 import { FieldValue } from 'firebase-admin/firestore';
 import pkg from 'whatsapp-web.js';
 const { MessageMedia } = pkg;
@@ -59,12 +60,11 @@ export function initPdfHandler() {
       const buffer = Buffer.from(media.data, 'base64');
       const publicUrl = await uploadPdf(buffer, curp);
 
-      // Delay anti-ban antes de enviar al cliente
-      await randomDelay(5000, 10000);
-
-      // Reenviar PDF al grupo del cliente con la CURP en el caption
+      // Envío encolado al grupo del cliente con delay anti-spam
       const mediaToSend = new MessageMedia(media.mimetype, media.data, `${curp}.pdf`);
-      await client.sendMessage(grupoClienteId, mediaToSend, { caption: curp });
+      await enqueue(grupoClienteId, () =>
+        client.sendMessage(grupoClienteId, mediaToSend, { caption: curp })
+      );
       console.log(`[PdfHandler] PDF enviado al grupo del cliente para CURP ${curp}.`);
 
       // Delay antes de reaccionar al mensaje original del cliente

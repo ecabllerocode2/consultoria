@@ -4,35 +4,63 @@ import { getGruposClientes, getGrupoAsesores } from './config.js';
 import { extractCurps, randomDelay } from './utils.js';
 import { sendNotification } from './fcm.js';
 import { watchForReaction } from './watchdog.js';
+import { enqueue } from './sendQueue.js';
 import { FieldValue } from 'firebase-admin/firestore';
 
 // Previene procesamiento simultáneo de la misma CURP (race condition)
 const procesando = new Set();
 
+/** Obtiene el nombre del chat, con fallback al ID */
+async function getChatName(msg) {
+  const chat = await msg.getChat().catch(() => null);
+  return chat?.name ?? msg.from;
+}
+
+/** Construye preview truncado del mensaje */
+function preview(body, max = 100) {
+  const clean = body.trim();
+  return clean.length > max ? `${clean.substring(0, max)}…` : clean;
+}
+
 export function initCurpHandler() {
   client.on('message', async (msg) => {
-    if (msg.fromMe) return;                                     // ignorar mensajes propios
-    if (!msg.from.endsWith('@g.us')) return;                    // solo grupos
-    if (!getGruposClientes().includes(msg.from)) return;        // solo grupos de clientes
-    if (msg.type !== 'chat') return;                            // solo texto plano
+    if (msg.fromMe) return;
+    if (!msg.from.endsWith('@g.us')) return;
 
     const body = msg.body ?? '';
     const curps = extractCurps(body);
+    const grupoAsesores = getGrupoAsesores();
+
+    // ── Mensajes del grupo de ASESORES sin CURP ──────────────────────────────
+    if (msg.from === grupoAsesores && msg.type === 'chat') {
+      if (curps.length === 0) {
+        const chatName = await getChatName(msg);
+        const msg_preview = preview(body);
+        console.log(`[CurpHandler] Mensaje sin CURP en asesores "${chatName}": "${msg_preview}"`);
+        await sendNotification(
+          `💼 Mensaje en asesores — revisión manual`,
+          `Grupo "${chatName}"\n"${msg_preview}"`
+        );
+      }
+      return; // el bot no procesa mensajes de asesores más allá de esto
+    }
+
+    // ── Mensajes de grupos de CLIENTES ───────────────────────────────────────
+    if (!getGruposClientes().includes(msg.from)) return;
+    if (msg.type !== 'chat') return;
 
     // Cualquier mensaje sin CURP debe revisarse manualmente
     if (curps.length === 0) {
-      const chat = await msg.getChat().catch(() => null);
-      const chatName = chat?.name ?? msg.from;
-      const preview = body.length > 80 ? `${body.substring(0, 80)}…` : body;
-      console.log(`[CurpHandler] Mensaje sin CURP en "${chatName}": "${preview}"`);
+      const chatName = await getChatName(msg);
+      const msg_preview = preview(body);
+      console.log(`[CurpHandler] Mensaje sin CURP en clientes "${chatName}": "${msg_preview}"`);
       await sendNotification(
-        '💬 Mensaje sin CURP — revisión manual',
-        `En "${chatName}": "${preview}"`
+        `💬 Mensaje en clientes — revisión manual`,
+        `Grupo "${chatName}"\n"${msg_preview}"`
       );
       return;
     }
 
-    const grupoAsesores = getGrupoAsesores();
     if (!grupoAsesores) {
       console.warn('[CurpHandler] grupoAsesores no configurado, ignorando mensaje.');
       return;
@@ -59,9 +87,10 @@ export function initCurpHandler() {
           updatedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
 
-        await randomDelay(2000, 5000);
-
-        const sentMsg = await client.sendMessage(grupoAsesores, `*${curp}*`);
+        // Envío encolado: espera turno + delay aleatorio antes de enviar al asesor
+        const sentMsg = await enqueue(grupoAsesores, () =>
+          client.sendMessage(grupoAsesores, `*${curp}*`)
+        );
 
         await db.collection('solicitudes').doc(curp).update({
           msgAsesorId: sentMsg.id._serialized,

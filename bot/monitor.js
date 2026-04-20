@@ -9,13 +9,13 @@ import 'dotenv/config';
 import { db } from './src/firebase.js';
 import { sendNotification } from './src/fcm.js';
 
-const MAX_SILENCE_MS   = 3 * 60 * 1000;  // 3 minutos sin latido → alerta
-const CHECK_INTERVAL_MS = 60 * 1000;     // Revisar cada 1 minuto
-const ALERT_COOLDOWN_MS = 5 * 60 * 1000; // No repetir alerta por 5 minutos
+const MAX_SILENCE_MS    = 90 * 1000;      // 90 s sin latido → alerta
+const CHECK_INTERVAL_MS = 30 * 1000;      // Revisar cada 30 s
+const ALERT_COOLDOWN_MS = 5 * 60 * 1000;  // No repetir alerta por 5 minutos
 
 let lastAlertTime = 0;
 
-console.log('[Monitor] Iniciado — vigilando heartbeat del bot cada 60s.');
+console.log('[Monitor] Iniciado — vigilando heartbeat cada 30s (umbral: 90s).');
 
 async function checkHeartbeat() {
   try {
@@ -36,15 +36,24 @@ async function checkHeartbeat() {
     const silenceMin = Math.floor(silenceMs / 60_000);
 
     if (silenceMs > MAX_SILENCE_MS) {
-      console.error(`[Monitor] ⚠️  Bot sin latido por ${silenceMin} min.`);
+      console.error(`[Monitor] ⚠️  Bot sin latido por ${silenceSeg}s.`);
 
       const cooldownOk = Date.now() - lastAlertTime > ALERT_COOLDOWN_MS;
       if (cooldownOk) {
-        await sendNotification(
-          '⚠️ ALERTA: Bot fuera de línea',
-          `El bot lleva ${silenceMin} min sin responder. Inicia gestión manual de trámites.`
-        );
         lastAlertTime = Date.now();
+
+        const titulo = '🚨 Bot fuera de línea';
+        const cuerpo = silenceMs > 120_000
+          ? `Sin respuesta hace ${silenceMin} min. Activa la Carga de Emergencia en la PWA.`
+          : `Sin respuesta hace ${silenceSeg}s. Puede ser un reinicio automático.`;
+
+        // 1. Notificación push + Firestore
+        await sendNotification(titulo, cuerpo);
+
+        // 2. Marcar en Firestore para que la PWA lo refleje aunque FCM falle
+        await db.collection('configuracion').doc('config').update({
+          botStatus: false,
+        }).catch(() => {});
       }
     } else {
       console.log(`[Monitor] ✅ Bot activo — último pulso hace ${silenceSeg}s.`);
@@ -54,6 +63,6 @@ async function checkHeartbeat() {
   }
 }
 
-// Verificar al iniciar y luego cada minuto
+// Verificar al iniciar y luego cada 30 s
 checkHeartbeat();
 setInterval(checkHeartbeat, CHECK_INTERVAL_MS);

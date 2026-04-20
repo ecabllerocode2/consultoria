@@ -5,14 +5,15 @@ import { useAuth } from '../context/AuthContext.jsx';
 import NotificationCenter from './NotificationCenter.jsx';
 
 const NAV = [
-  { id: 'grupos',     label: '📋 Grupos' },
   { id: 'tramites',   label: '📊 Trámites' },
+  { id: 'grupos',     label: '📋 Grupos' },
   { id: 'emergencia', label: '🆘 Emergencia' },
+  { id: 'vincular',   label: '📱 Vincular WA' },
   { id: 'logs',       label: '🖥️ Logs' },
 ];
 
 export default function Layout({ active, onNav, children }) {
-  const user = useAuth();
+  const { user } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   function navigate(id) {
