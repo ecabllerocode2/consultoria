@@ -6,10 +6,18 @@ export default function GestorGrupos() {
   const [config, setConfig] = useState(null);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
+  const [notifPhone, setNotifPhone] = useState('');
+  const [savingPhone, setSavingPhone] = useState(false);
+  const [phoneSaved, setPhoneSaved] = useState(false);
 
   useEffect(() => {
     const ref = doc(db, 'configuracion', 'config');
-    return onSnapshot(ref, (snap) => setConfig(snap.data() ?? {}),
+    return onSnapshot(ref, (snap) => {
+      const data = snap.data() ?? {};
+      setConfig(data);
+      // Inicializar campo de teléfono con el valor guardado (solo una vez)
+      setNotifPhone((prev) => prev || data.notifPhone || '');
+    },
       (err) => console.error('[GestorGrupos]', err.message));
   }, []);
 
@@ -36,6 +44,23 @@ export default function GestorGrupos() {
     setSaving(true);
     await updateDoc(doc(db, 'configuracion', 'config'), { grupoAsesores: id });
     setSaving(false);
+  }
+
+  async function guardarTelefono() {
+    const digits = notifPhone.replace(/\D/g, '');
+    if (!digits) return;
+    setSavingPhone(true);
+    await updateDoc(doc(db, 'configuracion', 'config'), { notifPhone: digits });
+    setSavingPhone(false);
+    setPhoneSaved(true);
+    setTimeout(() => setPhoneSaved(false), 2500);
+  }
+
+  async function borrarTelefono() {
+    setSavingPhone(true);
+    await updateDoc(doc(db, 'configuracion', 'config'), { notifPhone: '' });
+    setNotifPhone('');
+    setSavingPhone(false);
   }
 
   if (!config) return <p className="text-gray-400">Cargando configuración...</p>;
@@ -148,6 +173,53 @@ export default function GestorGrupos() {
             {search ? 'Sin resultados para esa búsqueda.' : 'Sin grupos disponibles.'}
           </p>
         )}
+      </section>
+
+      {/* Teléfono de notificaciones WhatsApp */}
+      <section className="bg-gray-900 rounded-xl p-5 space-y-3">
+        <div>
+          <h3 className="font-semibold text-gray-200">Notificaciones por WhatsApp</h3>
+          <p className="text-xs text-gray-500 mt-1">
+            El bot enviará un mensaje de WhatsApp a este número cada vez que envíe una alerta (caída, mensajes sin CURP, etc.).
+          </p>
+        </div>
+
+        <div className="flex gap-2 items-center">
+          <input
+            type="tel"
+            value={notifPhone}
+            onChange={(e) => { setNotifPhone(e.target.value); setPhoneSaved(false); }}
+            placeholder="521XXXXXXXXXX  (código de país sin +)"
+            className="flex-1 bg-gray-800 text-white text-sm rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 placeholder:text-gray-600"
+          />
+          <button
+            onClick={guardarTelefono}
+            disabled={savingPhone || !notifPhone.replace(/\D/g, '')}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition"
+          >
+            {phoneSaved ? '✓ Guardado' : savingPhone ? '...' : 'Guardar'}
+          </button>
+          {config?.notifPhone && (
+            <button
+              onClick={borrarTelefono}
+              disabled={savingPhone}
+              className="px-3 py-2 text-red-400 hover:text-red-300 text-sm transition disabled:opacity-50"
+              title="Quitar número"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        {config?.notifPhone && (
+          <p className="text-xs text-green-400">
+            ✓ Configurado: <span className="font-mono">{config.notifPhone}</span>
+          </p>
+        )}
+
+        <p className="text-xs text-gray-600">
+          Incluye el código de país sin «+»: México → <span className="font-mono bg-gray-800 px-1 rounded">521XXXXXXXXXX</span>
+        </p>
       </section>
     </div>
   );

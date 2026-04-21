@@ -1,8 +1,8 @@
 import { client } from './client.js';
 import { db } from './firebase.js';
 import { getGrupoAsesores } from './config.js';
-import { randomDelay } from './utils.js';
 import { cancelReactionWatch, watchForPdf, cancelPdfWatch } from './watchdog.js';
+import { enqueue } from './sendQueue.js';
 import { FieldValue } from 'firebase-admin/firestore';
 
 const REACCION_CHECKLIST = '✅';
@@ -60,18 +60,16 @@ export function initReactionHandler() {
         cancelReactionWatch(curp);
         cancelPdfWatch(curp);
 
-        // Delay anti-ban antes de reaccionar en el grupo del cliente
-        await randomDelay(2000, 5000);
-
-        // Obtener el mensaje original del cliente por ID y reaccionar
-        const msgOriginal = await client.getMessageById(msgOriginalId);
-
-        if (msgOriginal) {
-          await msgOriginal.react(emoji);
-          console.log(`[ReactionHandler] Reacción "${emoji}" replicada al cliente para CURP ${curp}.`);
-        } else {
-          console.warn(`[ReactionHandler] Mensaje original no encontrado para CURP ${curp}.`);
-        }
+        // Encolar la reacción al grupo del cliente (cola serializada anti-spam)
+        enqueue(grupoClienteId, async () => {
+          const msgOriginal = await client.getMessageById(msgOriginalId);
+          if (msgOriginal) {
+            await msgOriginal.react(emoji);
+            console.log(`[ReactionHandler] Reacción "${emoji}" replicada al cliente para CURP ${curp}.`);
+          } else {
+            console.warn(`[ReactionHandler] Mensaje original no encontrado para CURP ${curp}.`);
+          }
+        });
       }
     } catch (err) {
       console.error('[ReactionHandler] Error procesando reacción:', err);

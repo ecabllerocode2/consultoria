@@ -9,13 +9,31 @@ const STATUS_COLORS = {
   error:      'bg-red-500/20 text-red-300',
 };
 
-const FILTROS = ['todos', 'pendiente', 'revision', 'completado', 'error'];
+const STATUS_LIST = ['todos', 'pendiente', 'revision', 'completado', 'error'];
+
+function toLocalDateStr(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function isSameDay(date, dateStr) {
+  return toLocalDateStr(date) === dateStr;
+}
 
 export default function MonitorTramites() {
   const [solicitudes, setSolicitudes] = useState([]);
-  const [filtro, setFiltro] = useState('todos');
-  const [botStatus, setBotStatus] = useState(null);
+  const [filtroStatus, setFiltroStatus] = useState('todos');
+  const [fechaFiltro, setFechaFiltro] = useState('');
   const [lastHeartbeat, setLastHeartbeat] = useState(null);
+  const [now, setNow] = useState(Date.now());
+
+  // Refrescar "ahora" cada 30s para que el tiempo de silencio se actualice en pantalla
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     const q = query(collection(db, 'solicitudes'), orderBy('updatedAt', 'desc'));
@@ -31,50 +49,122 @@ export default function MonitorTramites() {
       doc(db, 'configuracion', 'config'),
       (snap) => {
         const data = snap.data() ?? {};
-        setBotStatus(data.botStatus ?? false);
         setLastHeartbeat(data.lastHeartbeat?.toDate() ?? null);
       },
       (err) => console.error('[Firestore] config:', err.message)
     );
   }, []);
 
-  const filtradas = filtro === 'todos'
-    ? solicitudes
-    : solicitudes.filter((s) => s.status === filtro);
+  // Bot se considera activo si el último pulso llegó hace menos de 2 minutos.
+  // Esto evita mostrar "activo" si el bot se cayó sin actualizar botStatus.
+  const STALE_MS = 2 * 60_000;
+  const silencioMs = lastHeartbeat ? now - lastHeartbeat.getTime() : null;
+  const isActive = silencioMs !== null && silencioMs < STALE_MS;
+  const silencioMin = silencioMs !== null ? Math.floor(silencioMs / 60_000) : null;
+  const silencioSeg = silencioMs !== null ? Math.floor((silencioMs % 60_000) / 1000) : null;
 
-  const silencioMin = lastHeartbeat
-    ? Math.floor((Date.now() - lastHeartbeat.getTime()) / 60_000)
-    : null;
+  const porFecha = fechaFiltro
+    ? solicitudes.filter((s) => {
+        const d = s.updatedAt?.toDate();
+        return d && isSameDay(d, fechaFiltro);
+      })
+    : solicitudes;
+
+  const filtradas = filtroStatus === 'todos'
+    ? porFecha
+    : porFecha.filter((s) => s.status === filtroStatus);
+
+  const contadores = {
+    total:      porFecha.length,
+    pendiente:  porFecha.filter((s) => s.status === 'pendiente').length,
+    revision:   porFecha.filter((s) => s.status === 'revision').length,
+    completado: porFecha.filter((s) => s.status === 'completado').length,
+    error:      porFecha.filter((s) => s.status === 'error').length,
+    conPdf:     porFecha.filter((s) => s.r2Url).length,
+  };
+
+  const hoyStr = toLocalDateStr(new Date());
 
   return (
     <div className="space-y-5">
+      {/* Encabezado */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h2 className="text-xl font-bold">Monitor de Trámites</h2>
-        {/* Estado del bot */}
         <div className="flex items-center gap-2 text-sm">
-          <span className={`w-2.5 h-2.5 rounded-full ${botStatus ? 'bg-green-400 animate-pulse' : 'bg-red-500'}`} />
-          <span className={botStatus ? 'text-green-400' : 'text-red-400'}>
-            {botStatus ? 'Bot activo' : 'Bot desconectado'}
+          <span className={`w-2.5 h-2.5 rounded-full ${isActive ? 'bg-green-400 animate-pulse' : 'bg-red-500'}`} />
+          <span className={isActive ? 'text-green-400' : 'text-red-400'}>
+            {isActive ? 'Bot activo' : lastHeartbeat ? 'Bot desconectado' : 'Sin datos'}
           </span>
           {lastHeartbeat && (
-            <span className="text-gray-500">— último pulso hace {silencioMin} min</span>
+            <span className="text-gray-500">
+              — hace {silencioMin > 0 ? `${silencioMin} min` : `${silencioSeg}s`}
+            </span>
           )}
         </div>
       </div>
 
+      {/* Contadores */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+        {[
+          { label: 'Total',      value: contadores.total,      color: 'text-white',       bg: 'bg-gray-800' },
+          { label: 'Pendiente',  value: contadores.pendiente,  color: 'text-yellow-300',  bg: 'bg-yellow-500/10' },
+          { label: 'Revisión',   value: contadores.revision,   color: 'text-blue-300',    bg: 'bg-blue-500/10' },
+          { label: 'Completado', value: contadores.completado, color: 'text-green-300',   bg: 'bg-green-500/10' },
+          { label: 'Error',      value: contadores.error,      color: 'text-red-300',     bg: 'bg-red-500/10' },
+          { label: 'Con PDF',    value: contadores.conPdf,     color: 'text-indigo-300',  bg: 'bg-indigo-500/10' },
+        ].map(({ label, value, color, bg }) => (
+          <div key={label} className={`${bg} rounded-xl p-3 text-center`}>
+            <p className={`text-2xl font-bold ${color}`}>{value}</p>
+            <p className="text-xs text-gray-500 mt-0.5">{label}</p>
+          </div>
+        ))}
+      </div>
+
       {/* Filtros */}
-      <div className="flex gap-2 flex-wrap">
-        {FILTROS.map((f) => (
+      <div className="flex flex-wrap gap-3 items-center">
+        {/* Filtro por status */}
+        <div className="flex gap-1.5 flex-wrap">
+          {STATUS_LIST.map((f) => (
+            <button
+              key={f}
+              onClick={() => setFiltroStatus(f)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                filtroStatus === f ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
+              }`}
+            >
+              {f.charAt(0).toUpperCase() + f.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        <div className="w-px h-6 bg-gray-700 hidden sm:block" />
+
+        {/* Filtro por fecha */}
+        <div className="flex gap-2 items-center">
           <button
-            key={f}
-            onClick={() => setFiltro(f)}
+            onClick={() => setFechaFiltro(fechaFiltro === hoyStr ? '' : hoyStr)}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-              filtro === f ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
+              fechaFiltro === hoyStr ? 'bg-teal-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
             }`}
           >
-            {f.charAt(0).toUpperCase() + f.slice(1)}
+            Hoy
           </button>
-        ))}
+          <input
+            type="date"
+            value={fechaFiltro}
+            onChange={(e) => setFechaFiltro(e.target.value)}
+            className="bg-gray-800 text-gray-300 text-sm rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-indigo-500 [color-scheme:dark]"
+          />
+          {fechaFiltro && (
+            <button
+              onClick={() => setFechaFiltro('')}
+              className="text-gray-500 hover:text-gray-300 text-sm transition"
+              title="Quitar filtro de fecha"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Tabla */}
@@ -112,7 +202,9 @@ export default function MonitorTramites() {
             ))}
             {filtradas.length === 0 && (
               <tr>
-                <td colSpan={5} className="py-8 text-center text-gray-600">Sin trámites.</td>
+                <td colSpan={5} className="py-8 text-center text-gray-600">
+                  {fechaFiltro ? `Sin trámites el ${fechaFiltro}.` : 'Sin trámites.'}
+                </td>
               </tr>
             )}
           </tbody>
