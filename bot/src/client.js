@@ -1,7 +1,6 @@
 import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode-terminal';
-import QRCode from 'qrcode';
 import { db } from './firebase.js';
 import { sendNotification } from './fcm.js';
 import { startHeartbeat, stopHeartbeat } from './heartbeat.js';
@@ -60,12 +59,39 @@ export function initQrListener() {
 
       try {
         console.log(`[WhatsApp] Generando código de emparejamiento para ${phone}…`);
-        const code = await client.requestPairingCode(phone);
-        const formatted = code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
+
+        // Reintentar hasta 3 veces: "Target closed" ocurre cuando la página
+        // de WhatsApp Web recarga el QR justo al momento de la solicitud.
+        let code;
+        for (let intento = 1; intento <= 3; intento++) {
+          try {
+            // Definir onCodeReceivedEvent en el contexto de la página si aún no existe.
+            // wweb.js 1.34+ la necesita para devolver el código via evaluate().
+            await client.pupPage.evaluate(() => {
+              if (typeof window.onCodeReceivedEvent !== 'function') {
+                window.onCodeReceivedEvent = (c) => c;
+              }
+            });
+            code = await client.requestPairingCode(phone);
+            break; // éxito — salir del loop
+          } catch (err) {
+            const esTargetClosed = err.message.includes('Target closed') || err.message.includes('Session closed') || err.message.includes('Execution context was destroyed') || err.message.includes('detached frame') || err.message.includes('Detached');
+            if (intento < 3 && esTargetClosed) {
+              console.log(`[WhatsApp] Reintento ${intento}/3 — página recargando, esperando 3s…`);
+              await new Promise(r => setTimeout(r, 3000));
+            } else {
+              throw err; // último intento o error desconocido
+            }
+          }
+        }
+
+        console.log(`[WhatsApp] requestPairingCode retornó:`, JSON.stringify(code));
+        if (!code) throw new Error('El código retornado está vacío');
+
+        const str = String(code).trim();
+        const formatted = str.length === 8 ? `${str.slice(0, 4)}-${str.slice(4)}` : str;
         await qrRef.set({ pairingCode: formatted, pairingCodeError: null }, { merge: true });
-        console.log(`[WhatsApp] Código generado: ${formatted}`);
-        // Después de requestPairingCode, WhatsApp Web cambia a modo teléfono.
-        // Marcamos que ya no estamos en modo QR para evitar confusión.
+        console.log(`[WhatsApp] ✅ Código guardado en Firestore: ${formatted}`);
         inQrState = false;
       } catch (err) {
         console.error('[WhatsApp] Error generando pairing code:', err.message);
@@ -81,10 +107,11 @@ client.on('qr', async (qr) => {
   qrcode.generate(qr, { small: true });
 
   try {
-    // width=400 y margin=4 para mayor fiabilidad al escanear desde pantalla
-    const dataUrl = await QRCode.toDataURL(qr, { width: 400, margin: 4, errorCorrectionLevel: 'M' });
+    // Guardar el string crudo PRIMERO para que la PWA lo reciba lo antes posible.
+    // La PWA renderiza el QR localmente desde qrString (sin depender del dataUrl).
     await qrRef.set({
-      dataUrl,
+      qrString: qr,
+      dataUrl: null,
       createdAt: new Date().toISOString(),
       paired: false,
       pairingCode: null,

@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import { QRCode as QRCodeSVG } from 'react-qr-code';
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase.js';
 
@@ -11,6 +12,8 @@ export default function VincularWhatsApp() {
   const [restarting, setRestarting] = useState(false);
   const [countdown, setCountdown] = useState(null); // segundos restantes del código
   const countdownRef = useRef(null);
+  const [qrAge, setQrAge] = useState(null); // segundos desde último QR
+  const qrAgeRef = useRef(null);
 
   useEffect(() => {
     return onSnapshot(doc(db, 'configuracion', 'qr'), (snap) => {
@@ -31,6 +34,23 @@ export default function VincularWhatsApp() {
       setRestarting(false);
     }
   }, [qrData?.pairingCode, qrData?.pairingCodeError, qrData?.paired]);
+
+  // Contador de edad del QR (segundos desde createdAt)
+  useEffect(() => {
+    if (qrData?.createdAt && !qrData?.paired) {
+      const update = () => {
+        const seconds = Math.round((Date.now() - new Date(qrData.createdAt).getTime()) / 1000);
+        setQrAge(seconds);
+      };
+      update();
+      if (qrAgeRef.current) clearInterval(qrAgeRef.current);
+      qrAgeRef.current = setInterval(update, 1000);
+    } else {
+      clearInterval(qrAgeRef.current);
+      setQrAge(null);
+    }
+    return () => clearInterval(qrAgeRef.current);
+  }, [qrData?.createdAt, qrData?.paired]);
 
   // Countdown del código de emparejamiento
   useEffect(() => {
@@ -71,8 +91,11 @@ export default function VincularWhatsApp() {
   }
 
   const isPaired = qrData?.paired === true;
-  const hasQr = !!qrData?.dataUrl && !isPaired;
+  const hasQr = !!qrData?.qrString && !isPaired;
   const botAvailable = qrData !== undefined && !isPaired;
+  // QR fresco: menos de 18 s (WhatsApp renueva cada ~20 s)
+  const qrFresh = qrAge !== null && qrAge < 18;
+  const qrAging = qrAge !== null && qrAge >= 18;
   const codeExpired = countdown === 0;
 
   return (
@@ -136,17 +159,29 @@ export default function VincularWhatsApp() {
       {/* QR disponible */}
       {hasQr && !restarting && (
         <div className="bg-gray-900 rounded-2xl p-6 flex flex-col items-center gap-4">
-          <div className="p-2 bg-white rounded-xl">
-            <img
-              src={qrData.dataUrl}
-              alt="QR WhatsApp"
-              className="w-60 h-60 rounded-lg"
+          {/* Indicador de frescura */}
+          {qrAge !== null && (
+            <div className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-mono ${
+              qrAging
+                ? 'bg-amber-900/30 text-amber-300 border border-amber-700/50'
+                : 'bg-green-900/30 text-green-300 border border-green-700/50'
+            }`}>
+              <span>{qrAging ? '⚠️ QR envejeciendo — espera el siguiente' : '✅ QR fresco — escanea ahora'}</span>
+              <span>{qrAge}s</span>
+            </div>
+          )}
+          <div className="p-3 bg-white rounded-xl">
+            <QRCodeSVG
+              value={qrData.qrString}
+              size={256}
+              level="H"
+              style={{ display: 'block' }}
             />
           </div>
           <p className="text-xs text-gray-400 text-center">
             WhatsApp → Dispositivos vinculados → Vincular un dispositivo → Escanear QR
           </p>
-          <p className="text-xs text-gray-600 animate-pulse text-center">
+          <p className="text-xs text-gray-600 text-center">
             El QR se renueva automáticamente cada ~20 s
           </p>
         </div>
